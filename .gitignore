@@ -9,3 +9,5 @@ Cargo.lock
 
 # dependencies
 /node_modules
+
+.vs_code
