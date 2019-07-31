@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+Cargo.lock
+
+# compiled output
+/dist
+/tmp
+/dev
+
+# dependencies
+/node_modules
