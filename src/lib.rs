@@ -1,13 +1,8 @@
-#[macro_use]
-extern crate lazy_static;
-use std::sync::{Mutex, MutexGuard};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use web_sys::{ErrorEvent, MessageEvent, WebSocket, BinaryType, AudioContext, AudioBuffer};
-use js_sys::{Int16Array, Reflect, Number};
-
-static MIN_SPLIT_SIZE: f32 = 0.02;
-static MAX_SAMPLE_VALUE: usize = 32768;
+use web_sys::{ErrorEvent, MessageEvent, WebSocket, BinaryType, AudioContext};
+use js_sys::{Int16Array};
+use std::collections::VecDeque;
 
 mod audio;
 
@@ -22,38 +17,16 @@ extern "C" {
 }
 
 #[wasm_bindgen]
-#[derive(Debug, Clone)]
 pub struct AudioState {
-    ws: WebSocket,
-    // ctx: AudioContext,
-    // channels: u8,
-    // rate: usize,
-    // bytes: usize,
-    // next_time: usize,
-    // queue: Vec<Int16Array>
+    ws: WebSocket
 }
 
 impl AudioState {
-    // pub fn set_queue(&mut self, queue: Vec<Int16Array>) {
-    //     self.queue = queue;
-    // }
-
-    // pub fn set_next_time(&mut self, time: usize) {
-    //     self.next_time = time;
-    // }
-
     pub fn close(&self) {
         match self.ws.close() {
             Err(e) => console_log!("{:?}", e),
             _ => ()
         }
-        // match &self.ws {
-            // Some(_ws) => match _ws.close() {
-            //     Err(e) => console_log!("{:?}", e),
-            //     _ => ()
-            // },
-            // _ => console_log!("Impossible the close the websocket: no instance")
-        // }
     }
 }
 
@@ -63,7 +36,7 @@ pub fn start(uri: String, channels: u32, rate: u32, bytes: u32) -> AudioState {
     let state = AudioState {
         ws: WebSocket::new_with_str(&uri, "binary").unwrap()
     };
-    init_ws(&state);
+    init_ws(&state, channels, rate, bytes);
     state
 }
 
@@ -78,16 +51,23 @@ pub fn stop(state: AudioState) {
  * Set binary type to arraybuffer
  * Bind the callbacks
 **/
-fn init_ws(state: &AudioState) {
+fn init_ws(state: &AudioState, channels: u32, rate: u32, bytes: u32) {
     console_log!("Websocket initialisation");
     state.ws.set_binary_type(BinaryType::Arraybuffer);
     console_log!("Binary type: {:?}", state.ws.binary_type());
-    let on_message_cb = on_message();
+
+    let queue: VecDeque<Vec<i16>> = VecDeque::new();
+    let audio_context = AudioContext::new().unwrap();
+    let next_time: u32 = 0;
+
+    let on_message_cb = on_message(queue, audio_context, next_time, channels, rate, bytes);
     let on_open_cb = on_open();
     let on_error_cb = on_error();
+
     state.ws.set_onmessage(Some(on_message_cb.as_ref().unchecked_ref()));
     state.ws.set_onopen(Some(on_open_cb.as_ref().unchecked_ref()));
     state.ws.set_onerror(Some(on_error_cb.as_ref().unchecked_ref()));
+
     on_message_cb.forget();
     on_open_cb.forget();
     on_error_cb.forget();
@@ -96,14 +76,43 @@ fn init_ws(state: &AudioState) {
 /**
  * WebSocket MESSAGE callback
 **/
-fn on_message() -> Closure<dyn FnMut(MessageEvent)> {
+fn on_message(
+    mut queue: VecDeque<Vec<i16>>,
+    audio_context: AudioContext,
+    mut next_time: u32,
+    channels: u32,
+    rate: u32,
+    bytes: u32
+) -> Closure<dyn FnMut(MessageEvent)> {
     Closure::wrap(Box::new(move |e: MessageEvent| {
         let response = e.data();
         let data = Int16Array::new_with_byte_offset(&response, 0);
-        STATE.lock().unwrap().queue.push(data);
-        let packet = shift_packet();
+        let mut packet: Vec<i16> = Vec::new();
+        data.for_each(&mut |value: i16, _, _| packet.push(value));
 
-        console_log!("Message event, received data: {:?}", response);
+        queue.push_back(packet);
+
+        let shifted = match audio::join_packets(queue.clone()) {
+            Some(data) => {
+                queue = audio::split_packet(data, channels, rate, bytes);
+                queue.pop_front()
+            },
+            None => None
+        };
+
+        match shifted {
+            Some(data) => {
+                let packet_time = audio_context.current_time() as u32;
+                if next_time < packet_time {
+                    next_time = packet_time;
+                }
+                let source = audio_context.create_buffer_source().unwrap();
+                source.connect_with_audio_node(&audio_context.destination()).unwrap();
+                //let (buffer, time) = audio::to_audio_buffer(data, audio_context, next_time, channels, bytes, rate);
+            },
+            None => ()
+        };
+
     }) as Box<dyn FnMut(MessageEvent)>)
 }
 
@@ -124,97 +133,3 @@ fn on_error() -> Closure<dyn FnMut(ErrorEvent)> {
         console_log!("Error event: {:?}", e);
     }) as Box<dyn FnMut(ErrorEvent)>)
 }
-
-// fn join_packets(packets: Vec<Int16Array>) -> Int16Array {
-//     if packets.len() <= 1 {
-//         return packets.get(0).unwrap().clone();
-//     }
-//     let length = packets
-//         .iter()
-//         .map(|packet| packet.length())
-//         .fold(0, |acc, cur| acc + cur);
-
-//     let joined = Int16Array::new_with_length(length);
-//     let mut offset = 0;
-
-//     packets
-//         .iter()
-//         .for_each(|packet| {
-//             joined.set(packet, offset);
-//             offset += packet.length();
-//         });
-
-//     joined
-// }
-
-// fn split_packet(data: Int16Array) -> Vec<Int16Array> {
-//     let mut min_value = std::u32::MAX;
-//     let mut optimal_value = data.length();
-//     let samples = ((data.length() / STATE.lock().unwrap().channels as u32) as f32).floor() as u32;
-//     let min_split_samples = (STATE.lock().unwrap().rate as f32 * MIN_SPLIT_SIZE).floor() as u32;
-//     let start = [
-//         STATE.lock().unwrap().channels as u32 * min_split_samples,
-//         STATE.lock().unwrap().channels as u32 * (samples - min_split_samples)
-//     ]
-//     .iter()
-//     .max()
-//     .unwrap()
-//     .clone();
-
-//     let mut offset = start;
-//     while offset < data.length() {
-//         let mut total = 0;
-//         for channel in 0..STATE.lock().unwrap().channels {
-//             let value = Reflect::get(&data, &Number::from(offset + channel as u32)).ok().unwrap();
-//             total = total + value
-//                 .as_f64()
-//                 .map(|x| x as i32)
-//                 .unwrap()
-//                 .abs();
-//         }
-//         if (total as u32) <= min_value {
-//             optimal_value = offset + STATE.lock().unwrap().channels as u32;
-//             min_value = total as u32;
-//         }
-//         offset = offset + STATE.lock().unwrap().channels as u32;
-//     };
-
-//     if optimal_value == data.length() {
-//         return vec!(data);
-//     }
-
-//     let buf1 = data.buffer().slice_with_end(0, optimal_value * (STATE.lock().unwrap().bytes as u32));
-//     let buf2 = data.buffer().slice(optimal_value * (STATE.lock().unwrap().bytes as u32));
-//     vec!(
-//         Int16Array::new_with_byte_offset(&buf1, 0),
-//         Int16Array::new_with_byte_offset(&buf2, 0)
-//     )
-// }
-
-fn shift_packet() -> Option<Int16Array> {
-    let data = join_packets(STATE.lock().unwrap().queue.clone());
-    let new_queue = split_packet(data);
-    STATE.lock().unwrap().set_queue(new_queue);
-    STATE.lock().unwrap().queue.first().map(|x| x.clone())
-}
-
-// fn to_audio_buffer(data: Int16Array) -> AudioBuffer {
-//     let samples = data.length() / STATE.lock().unwrap().channels as u32;
-//     let time = STATE.lock().unwrap().ctx.current_time() as usize;
-//     if STATE.lock().unwrap().next_time < time {
-//         STATE.lock().unwrap().set_next_time(time);
-//     }
-//     let audio_buffer = STATE.lock().unwrap().ctx.create_buffer(STATE.lock().unwrap().channels as u32, STATE.lock().unwrap().bytes as u32, STATE.lock().unwrap().rate as f32).ok().unwrap();
-
-//     for channel in 0..STATE.lock().unwrap().channels {
-//         let mut audio_data = audio_buffer.get_channel_data(channel as u32).ok().unwrap();
-//         let mut offset = STATE.lock().unwrap().channels;
-//         for i in 0..samples {
-//             let d = Reflect::get(&data, &Number::from(offset)).ok().unwrap().as_f64().unwrap();
-//             audio_data[i as usize] = d as f32 / MAX_SAMPLE_VALUE as f32;
-//             offset = offset + STATE.lock().unwrap().channels;
-//         }
-//     }
-
-//     audio_buffer
-// }

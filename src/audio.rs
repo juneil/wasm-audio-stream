@@ -1,10 +1,11 @@
 use web_sys::{AudioContext, AudioBuffer};
+use std::collections::VecDeque;
 
 static MIN_SPLIT_SIZE: f32 = 0.02;
 static MAX_SAMPLE_VALUE: usize = 32768;
 
 // Concatenate the arrays into one array
-pub fn join_packets(packets: Vec<Vec<i16>>) -> Option<Vec<i16>> {
+pub fn join_packets(packets: VecDeque<Vec<i16>>) -> Option<Vec<i16>> {
     match packets.len() {
         0 => None,
         1 => packets.get(0)
@@ -17,7 +18,7 @@ pub fn join_packets(packets: Vec<Vec<i16>>) -> Option<Vec<i16>> {
     }
 }
 
-fn split_packet(data: Vec<i16>, channels: u32, rate: u32, bytes: u32) -> Vec<Vec<i16>> {
+pub fn split_packet(data: Vec<i16>, channels: u32, rate: u32, bytes: u32) -> VecDeque<Vec<i16>> {
     let mut min_value = std::u32::MAX;
     let mut optimal_value = data.len();
     let samples = ((data.len() as u32 / channels) as f32).floor() as u32;
@@ -42,16 +43,20 @@ fn split_packet(data: Vec<i16>, channels: u32, rate: u32, bytes: u32) -> Vec<Vec
         offset = offset + channels;
     };
 
+    let mut result = VecDeque::new();
     if optimal_value == data.len() {
-        return vec!(data);
+        result.push_back(data);
+        return result;
     }
 
     let (buf1, buf2) = data.split_at(optimal_value * bytes as usize);
-    vec!(buf1.to_vec(), buf2.to_vec())
+    result.push_back(buf1.to_vec());
+    result.push_back(buf2.to_vec());
+    result
 }
 
 // Convert the data into an AudioBuffer
-fn to_audio_buffer(data: Vec<i16>, ctx: AudioContext, next_time: u32, channels: u32, bytes: u32, rate: u32) -> (AudioBuffer, u32) {
+pub fn to_audio_buffer(data: Vec<i16>, ctx: AudioContext, next_time: u32, channels: u32, bytes: u32, rate: u32) -> (AudioBuffer, u32) {
     let samples = data.len() as u32 / channels;
     let mut time = next_time;
     if next_time < ctx.current_time() as u32 {

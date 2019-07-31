@@ -7,9 +7,7 @@ rust
             if (state) {
                 return;
             }
-            state = audio.start(
-                new audio.AudioConfig('ws://localhost:14520', 1, 16000, 320)
-            );
+            state = audio.start('ws://127.0.0.1:15000', 1, 16000, 320);
         }
         window.audioStop = function() {
             if (!state) {
