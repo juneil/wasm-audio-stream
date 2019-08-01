@@ -1,7 +1,7 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{ErrorEvent, MessageEvent, WebSocket, BinaryType, AudioContext};
-use js_sys::{Int16Array};
+use js_sys::{Int16Array, ArrayBuffer, DataView};
 use std::collections::VecDeque;
 
 mod audio;
@@ -85,11 +85,22 @@ fn on_message(
     bytes: u32
 ) -> Closure<dyn FnMut(MessageEvent)> {
     Closure::wrap(Box::new(move |e: MessageEvent| {
-        let response = e.data();
-        let data = Int16Array::new_with_byte_offset(&response, 0);
-        let mut packet: Vec<i16> = Vec::new();
-        data.for_each(&mut |value: i16, _, _| packet.push(value));
+        let response: ArrayBuffer = ArrayBuffer::from(e.data());
+        let data = DataView::new(&response, 0, (response.byte_length() + 1) as usize);
 
+        let mut packet: Vec<i16> = Vec::new();
+        for i in 0..response.byte_length() {
+            packet.push(data.get_int16(i as usize));
+        }
+
+        console_log!("RAW: {:?}", packet.len());
+        // let data = Int16Array::new_with_byte_offset_and_length(&e.data(), 0, response.byte_length());
+        // let data = Int16Array::from(e.data());
+        // let mut packet: Vec<i16> = Vec::new();
+        // data.for_each(&mut |value: i16, _, _| packet.push(value));
+        // let mut values: [i16; 320] = [0; 320];
+        // data.copy_to(&mut values);
+        // console_log!("RAW: {:?}", packet);
         queue.push_back(packet);
 
         let shifted = match audio::join_packets(queue.clone()) {
@@ -100,11 +111,11 @@ fn on_message(
             None => None
         };
 
-        // console_log!("To play: {:?}", shifted);
 
         match shifted {
             Some(data) => {
                 let data_len = data.len() as u32;
+        // console_log!("SHIFTED: {:?}", data_len);
                 let packet_time = audio_context.current_time() as u32;
                 if next_time < packet_time {
                     next_time = packet_time;
