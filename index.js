@@ -7,7 +7,7 @@ rust
             if (state) {
                 return;
             }
-            state = audio.start('ws://127.0.0.1:14520', 1, 16000, 320);
+            state = audio.start('ws://127.0.0.1:15000', 1, 16000, 320);
             // setTimeout(() => {
             //     audioStop();
             // }, 2000);
