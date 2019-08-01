@@ -100,15 +100,22 @@ fn on_message(
             None => None
         };
 
+        // console_log!("To play: {:?}", shifted);
+
         match shifted {
             Some(data) => {
+                let data_len = data.len() as u32;
                 let packet_time = audio_context.current_time() as u32;
                 if next_time < packet_time {
                     next_time = packet_time;
                 }
                 let source = audio_context.create_buffer_source().unwrap();
                 source.connect_with_audio_node(&audio_context.destination()).unwrap();
-                //let (buffer, time) = audio::to_audio_buffer(data, audio_context, next_time, channels, bytes, rate);
+                let (buffer, time) = audio::to_audio_buffer(data, &audio_context, next_time, channels, bytes, rate);
+                next_time = time;
+                source.set_buffer(Some(&buffer));
+                source.start_with_when(next_time as f64).unwrap();
+                next_time = next_time + (data_len / channels / rate);
             },
             None => ()
         };
